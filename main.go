@@ -15,14 +15,17 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+// Структура со сведениями о сервере
 type Server struct {
-	dsn string
-	workDir string
-	pidFile string
-	pid int
+	DSN     string // строка, используемая для подключения к тестовой БД
+	WorkDir string // путь ко временному рабочему каталогу
+	PidFile string // путь к файлу с идентификатором процесса mysqld
+	Pid     int    // сам этот идентификатор
 }
 
+// Запустить новый экземпляр временного сервера и создать на нём тестовую БД
 func NewServer() (*Server, error) {
+
 	mysqld := findProgram("mysqld")
 	if mysqld == "" {
 		return nil, fmt.Errorf("Can't find the 'mysqld' program.")
@@ -47,15 +50,15 @@ func NewServer() (*Server, error) {
 	var mysql Server
 
 	// Временный рабочий каталог
-	mysql.workDir, err = makeTempDir()
+	mysql.WorkDir, err = makeTempDir()
 	if err != nil {
 		return nil, err
 	}
 
-	dataDir := filepath.Join(mysql.workDir, "data")
-	tempDir := filepath.Join(mysql.workDir, "tmp")
-	socket  := filepath.Join(mysql.workDir, "sock")
-	mysql.pidFile = filepath.Join(mysql.workDir, "pid")
+	dataDir := filepath.Join(mysql.WorkDir, "data")
+	tempDir := filepath.Join(mysql.WorkDir, "tmp")
+	socket := filepath.Join(mysql.WorkDir, "sock")
+	mysql.PidFile = filepath.Join(mysql.WorkDir, "pid")
 
 	if err := os.Mkdir(dataDir, 0700); err != nil {
 		return nil, err
@@ -79,7 +82,7 @@ func NewServer() (*Server, error) {
 		"--lc-messages-dir=" + lcMessagesDir,
 		"--datadir="  + dataDir,
 		"--tmpdir="   + tempDir,
-		"--pid-file=" + mysql.pidFile,
+		"--pid-file=" + mysql.PidFile,
 		"--socket="   + socket)
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -88,64 +91,72 @@ func NewServer() (*Server, error) {
 	// Убедимся, что он действительно запустился
 	for i := 0; i < 100; i++ {
 		time.Sleep(100 * time.Millisecond)
-		if exists(mysql.pidFile) {
+		if exists(mysql.PidFile) {
 			break
 		}
 	}
-	if !exists(mysql.pidFile) {
-		return nil, fmt.Errorf("Looks like mysqld has not started")
+	if !exists(mysql.PidFile) {
+		return &mysql, fmt.Errorf("Looks like mysqld has not started")
 	}
 
 	dsnRoot := "root@unix(" + socket + ")/"
-	mysql.dsn = dsnRoot + "test"
+	mysql.DSN = dsnRoot + "test"
 
 	// Узнаем идентификатор процесса
-	pidStr, err := ioutil.ReadFile(mysql.pidFile)
+	pidStr, err := ioutil.ReadFile(mysql.PidFile)
 	if err != nil {
-		return nil, err
+		return &mysql, err
 	}
-	if _, err := fmt.Sscanf(string(pidStr), "%d", &mysql.pid); err != nil {
-		return nil, err
+	if _, err := fmt.Sscanf(string(pidStr), "%d", &mysql.Pid); err != nil {
+		return &mysql, err
 	}
 
 	// Подключимся к нашему серверу
-	db, err := sql.Open("mysql", dsnRoot + "mysql")
+	db, err := sql.Open("mysql", dsnRoot+"mysql")
 	if err != nil {
-		return nil, err
+		return &mysql, err
 	}
 
 	// Создадим тестовую базу данных
 	if _, err = db.Exec("CREATE DATABASE test CHARACTER SET utf8"); err != nil {
-		return nil, err
+		return &mysql, err
+	}
+
+	// Отключимся от нашего сервера
+	if err := db.Close(); err != nil {
+		return &mysql, err
 	}
 
 	return &mysql, nil
 }
 
+// Остановить сервер и удалить созданные временные файлы и каталоги
 func (mysql *Server) Destroy() error {
 
-	// Пошлём сигнал завершения серверу
-	proc, err := os.FindProcess(mysql.pid)
-	if err != nil {
-		return err
-	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return err
-	}
-
-	// Подождём, пока сервер завершит работу
-	for i := 0; i < 100; i++ {
-		time.Sleep(100 * time.Millisecond)
-		if !exists(mysql.pidFile) {
-			break
+	if mysql.Pid != 0 {
+		// Пошлём сигнал завершения серверу
+		proc, err := os.FindProcess(mysql.Pid)
+		if err != nil {
+			return err
 		}
-	}
-	if exists(mysql.pidFile) {
-		return fmt.Errorf("Looks like mysqld does not want to stop")
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			return err
+		}
+
+		// Подождём, пока сервер завершит работу
+		for i := 0; i < 100; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if !exists(mysql.PidFile) {
+				break
+			}
+		}
+		if exists(mysql.PidFile) {
+			return fmt.Errorf("Looks like mysqld does not want to stop")
+		}
 	}
 
 	// Удалим временный каталог
-	if err := os.RemoveAll(mysql.workDir); err != nil {
+	if err := os.RemoveAll(mysql.WorkDir); err != nil {
 		return err
 	}
 
