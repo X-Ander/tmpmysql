@@ -1,4 +1,4 @@
-package main
+package tmpmysql
 
 import (
 	"database/sql"
@@ -15,14 +15,14 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-type TempMySQL struct {
+type Server struct {
 	dsn string
 	workDir string
 	pidFile string
 	pid int
 }
 
-func NewTempMySQL() (*TempMySQL, error) {
+func NewServer() (*Server, error) {
 	mysqld := findProgram("mysqld")
 	if mysqld == "" {
 		return nil, fmt.Errorf("Can't find the 'mysqld' program.")
@@ -44,7 +44,7 @@ func NewTempMySQL() (*TempMySQL, error) {
 	baseDir := extractDefault(defaults, "basedir")
 	lcMessagesDir := extractDefault(defaults, "lc-messages-dir")
 
-	var mysql TempMySQL
+	var mysql Server
 
 	// Временный рабочий каталог
 	mysql.workDir, err = makeTempDir()
@@ -122,7 +122,7 @@ func NewTempMySQL() (*TempMySQL, error) {
 	return &mysql, nil
 }
 
-func (mysql *TempMySQL) Destroy() error {
+func (mysql *Server) Destroy() error {
 
 	// Пошлём сигнал завершения серверу
 	proc, err := os.FindProcess(mysql.pid)
@@ -202,15 +202,4 @@ func makeTempDir() (string, error) {
 		i++
 	}
 	return "", fmt.Errorf("Too many temporary directories were already created")
-}
-
-func main() {
-	mysql, err := NewTempMySQL()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("workDir: %s\n", mysql.workDir)
-	if err := mysql.Destroy(); err != nil {
-		log.Fatal(err)
-	}
 }
